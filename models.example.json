@@ -1,0 +1,6 @@
+{
+  "example-alias:latest": [
+    "vendor/example-model",
+    "Example Model"
+  ]
+}

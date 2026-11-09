@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+state/
+*.sqlite*
+*.db*
+*.key
+*.pem
+*.crt
+*token*
+.env*
+agent.json
+status.json
+*.log
