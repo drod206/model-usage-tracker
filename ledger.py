@@ -75,6 +75,7 @@ CREATE INDEX IF NOT EXISTS deltas_observed ON deltas(observed);''')
    d['gpu_temp_max']=max((r['gpu_temp_max'] for r in measured if r.get('gpu_temp_max') is not None),default=None)
    d['gpu_temp_avg']=sum(r.get('gpu_temp_sum',0) for r in measured)/samples if samples else None
    d['gpu_temp_samples']=samples
+   d['last_used']=max((r['timestamp'] for r in rs),default=None)
    return d
   groups=collections.defaultdict(list)
   for r in rows:groups[(r['machine'],r.get('provider',''),r['model'],r.get('role',''),r['scope'])].append(r)
