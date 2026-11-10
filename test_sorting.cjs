@@ -1,0 +1,13 @@
+const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
+const source=fs.readFileSync('dashboard.js','utf8').split('// Sortable usage table')[1];
+assert.ok(source,'sorting implementation exists');
+const ctx={document:{querySelector:()=>null}};vm.createContext(ctx);vm.runInContext(source,ctx);
+assert.ok(ctx.compareTableValues('2','10',true)<0);
+assert.ok(ctx.compareTableValues('1,000','20',true)>0);
+assert.ok(ctx.compareTableValues('$0.25','$2.00',true)<0);
+assert.ok(ctx.compareTableValues('2026-11-09 01:00:00 UTC','2026-11-10 01:00:00 UTC',true)<0);
+assert.ok(ctx.compareTableValues('alpha','Beta',true)<0);
+assert.ok(ctx.compareTableValues('—','10',true)>0);
+assert.ok(ctx.compareTableValues('—','10',false)>0);
+assert.ok(ctx.compareTableValues('2','10',false)>0);
+console.log('Sorting checks passed');
