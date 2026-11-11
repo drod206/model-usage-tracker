@@ -1,4 +1,7 @@
 'use strict';
+function realBackend(group){const b=group.backend_model||group.backend||group.model;return b || '—';}
+function formatLastUsed(value){if(!Number.isFinite(value))return '—';const d=new Date(value*1000);return Number.isNaN(d.getTime())?'—':d.toISOString().slice(0,19).replace('T',' ')+' UTC';}
+function modelLabel(g){return g.backend&&g.backend!==g.model?g.model+' - '+g.backend:g.model;}
 const $=id=>document.getElementById(id),fmt=n=>Number(n||0).toLocaleString();
 // Verified standard short-context API rates; USD per million tokens, 2026-11-08.
 // Cache writes assume the documented 30-minute tier. Long-context premiums are not reconstructed.
@@ -52,47 +55,53 @@ function updateRetailTotals(groups){
   }
 }
 function formatMetric(value){return Number.isFinite(value)?value.toLocaleString('en-US',{minimumFractionDigits:1,maximumFractionDigits:1}):'—';}
-function realBackend(group){const b=group.backend_model||group.backend||group.model;return b || '—';}
-function formatLastUsed(value){if(!Number.isFinite(value))return '—';const d=new Date(value*1000);return Number.isNaN(d.getTime())?'—':d.toISOString().slice(0,19).replace('T',' ')+' UTC';}
-async function refresh(){try{const response=await fetch('/api/summary?days='+$('window').value,{cache:'no-store'});if(!response.ok)throw Error('Collector returned '+response.status);const data=await response.json();$('error').textContent='';$('total').textContent=fmt(data.total_tokens);$('inout').textContent=fmt(data.input_tokens)+' / '+fmt(data.output_tokens);$('calls').textContent=fmt(data.calls);$('unknown').textContent=fmt(data.unknown_records);updateRetailTotals(data.groups);$('status').textContent='Updated '+new Date(data.generated_at*1000).toLocaleString()+' · '+fmt(data.records)+' accounting records';$('coverage').textContent=data.coverage;$('rows').replaceChildren();for(const g of data.groups){const row=document.createElement('tr');for(const [idx,val]of[g.machine,(g.backend&&g.backend!==g.model?g.model+' - '+g.backend:g.model),g.role,g.scope,g.scope==='image'?'—':fmt(g.input_tokens),g.scope==='image'?'—':fmt(g.output_tokens),g.scope==='image'?'—':fmt(g.cache_read_tokens),g.scope==='image'?'—':fmt(g.reasoning_tokens),fmt(g.calls),fmt(g.unknown_records),g.scope==='cloud'?'—':g.gpu_name||'Not recorded',formatMetric(g.gpu_temp_min),formatMetric(g.gpu_temp_max),formatMetric(g.gpu_temp_avg),formatMetric(g.avg_tokens_per_second),realBackend(g),formatApiRetail(g),formatLastUsed(g.last_used)].entries()){const cell=document.createElement('td');cell.textContent=val;if(idx===16){const e=estimateApiRetail(g);cell.title=e?(e.pricingBasis==='benchmark'?'API comparison: ':'Matched API model: ')+e.pricingModel+'; standard short-context rates; 30-minute cache-write assumption':'No verified model price or complete usage available';}if(idx===10)cell.className='gpu';else if(idx>3)cell.className='num';row.append(cell)}$('rows').append(row)}if(!data.groups.length){const row=document.createElement('tr'),cell=document.createElement('td');cell.colSpan=18;cell.className='empty';cell.textContent='No measured records in this window yet. Historical baseline is available under All recorded usage.';row.append(cell);$('rows').append(row)}$('sources').replaceChildren();for(const s of data.sources){const e=document.createElement('span'),age=Math.floor(Date.now()/1000-s.last_seen);e.textContent=s.id+' · last seen '+(age<120?'just now':Math.floor(age/60)+' min ago');$('sources').append(e)}}catch(e){$('error').textContent='Could not refresh: '+e.message+' — last successful values remain visible.'}}
-$('refresh').addEventListener('click',refresh);$('window').addEventListener('change',refresh);refresh();setInterval(refresh,30000);
-
-// Sortable usage table
-function tableSortValue(text){
- const value=String(text??'').trim();
- if(!value||['—','Unknown','Not recorded'].includes(value))return null;
- if(/^\d{4}-\d\d-\d\d /.test(value)){const stamp=Date.parse(value.replace(' UTC','Z').replace(' ','T'));if(Number.isFinite(stamp))return stamp;}
- const number=value.replace(/^[≥<]\s*/, '').replace(/[$,]/g,'');
- if(/^-?\d+(\.\d+)?$/.test(number))return Number(number);
- return value;
+const SORT_COLUMNS=[
+  {value:g=>g.machine},{value:g=>modelLabel(g)},{value:g=>g.role},{value:g=>g.scope},
+  ...['input_tokens','output_tokens','cache_read_tokens','reasoning_tokens'].map(key=>({numeric:true,value:g=>g.scope==='image'?null:g[key]})),
+  ...['calls','unknown_records'].map(key=>({numeric:true,value:g=>g[key]})),
+  {value:g=>g.scope==='cloud'?null:g.gpu_name},
+  ...['gpu_temp_min','gpu_temp_max','gpu_temp_avg','avg_tokens_per_second'].map(key=>({numeric:true,value:g=>g[key]})),
+  {value:g=>g.backend_model||g.backend||g.model||null},
+  {numeric:true,value:g=>estimateApiRetail(g)?.usd??null},
+  {numeric:true,value:g=>g.last_used}
+];
+let latestGroups=[];
+let sortState={column:null,direction:'asc'};
+try{const stored=JSON.parse(localStorage.getItem('usage-tracker.table-sort'));if(stored&&Number.isInteger(stored.column)&&stored.column>=0&&stored.column<SORT_COLUMNS.length&&['asc','desc'].includes(stored.direction))sortState=stored;}catch{}
+function sortGroups(groups,column,direction){
+  const spec=Number.isInteger(column)?SORT_COLUMNS[column]:null;
+  if(!spec)return [...groups];
+  const value=g=>{const v=spec.value(g);return spec.numeric?(Number.isFinite(v)?v:null):(v==null||v===''?null:String(v));};
+  return groups.map((group,index)=>({group,index,value:value(group)})).sort((a,b)=>{
+    if(a.value===null)return b.value===null?a.index-b.index:1;
+    if(b.value===null)return -1;
+    const comparison=spec.numeric?a.value-b.value:a.value.localeCompare(b.value,'en',{numeric:true,sensitivity:'base'});
+    return (direction==='desc'?-comparison:comparison)||a.index-b.index;
+  }).map(item=>item.group);
 }
-function compareTableValues(a,b,ascending){
- const x=tableSortValue(a),y=tableSortValue(b);
- if(x===null||y===null)return x===y?0:x===null?1:-1;
- const result=typeof x==='number'&&typeof y==='number'?x-y:String(x).localeCompare(String(y),undefined,{numeric:true,sensitivity:'base'});
- return ascending?result:-result;
-}
-function initTableSorting(){
- const body=document.querySelector('#rows');if(!body)return;
- const headers=Array.from(body.closest('table').querySelectorAll('thead th'));
- let column=null,ascending=true;
- function apply(){
-  if(column===null||!body.rows.length||body.rows[0].cells.length!==headers.length)return;
-  const rows=Array.from(body.rows),sorted=rows.slice().sort((a,b)=>compareTableValues(a.cells[column].textContent,b.cells[column].textContent,ascending));
-  if(sorted.every((row,i)=>row===rows[i]))return;
-  observer.disconnect();body.replaceChildren(...sorted);observer.observe(body,{childList:true});
- }
- const observer=new MutationObserver(apply);observer.observe(body,{childList:true});
- headers.forEach((header,index)=>{
-  const button=document.createElement('button'),label=header.textContent;
-  button.type='button';button.textContent=label+' ↕';button.title='Sort by '+label;
-  button.style.cssText='border:0;background:transparent;color:inherit;font:inherit;padding:0;cursor:pointer';
-  header.replaceChildren(button);header.setAttribute('aria-sort','none');
-  button.addEventListener('click',()=>{
-   ascending=column===index?!ascending:true;column=index;
-   headers.forEach((h,i)=>{h.setAttribute('aria-sort',i===index?(ascending?'ascending':'descending'):'none');h.firstChild.textContent=h.firstChild.textContent.replace(/ [↕▲▼]$/,'')+' '+(i===index?(ascending?'▲':'▼'):'↕');});
-   apply();
+function updateSortHeaders(){
+  document.querySelectorAll('thead th').forEach((header,index)=>{
+    const selected=sortState.column===index;
+    header.setAttribute('aria-sort',selected?(sortState.direction==='asc'?'ascending':'descending'):'none');
+    const button=header.querySelector('button');
+    button.textContent=header.dataset.sortLabel+' '+(selected?(sortState.direction==='asc'?'▲':'▼'):'↕');
+    const next=selected?(sortState.direction==='asc'?'descending':'ascending'):(SORT_COLUMNS[index].numeric?'descending':'ascending');
+    button.setAttribute('aria-label','Sort by '+header.dataset.sortLabel+', '+next);
   });
- });
 }
-initTableSorting();
+function setupSorting(){
+  document.querySelectorAll('thead th').forEach((header,index)=>{
+    header.dataset.sortLabel=header.textContent;
+    const button=document.createElement('button');button.type='button';button.className='sort-button';
+    button.addEventListener('click',()=>{
+      sortState={column:index,direction:sortState.column===index?(sortState.direction==='asc'?'desc':'asc'):(SORT_COLUMNS[index].numeric?'desc':'asc')};
+      try{localStorage.setItem('usage-tracker.table-sort',JSON.stringify(sortState));}catch{}
+      updateSortHeaders();renderGroups(latestGroups);
+    });
+    header.replaceChildren(button);
+  });
+  updateSortHeaders();
+}
+function renderGroups(groups){$('rows').replaceChildren();for(const g of sortGroups(groups,sortState.column,sortState.direction)){const row=document.createElement('tr');for(const [idx,val]of[g.machine,modelLabel(g),g.role,g.scope,g.scope==='image'?'—':fmt(g.input_tokens),g.scope==='image'?'—':fmt(g.output_tokens),g.scope==='image'?'—':fmt(g.cache_read_tokens),g.scope==='image'?'—':fmt(g.reasoning_tokens),fmt(g.calls),fmt(g.unknown_records),g.scope==='cloud'?'—':g.gpu_name||'Not recorded',formatMetric(g.gpu_temp_min),formatMetric(g.gpu_temp_max),formatMetric(g.gpu_temp_avg),formatMetric(g.avg_tokens_per_second),realBackend(g),formatApiRetail(g),formatLastUsed(g.last_used)].entries()){const cell=document.createElement('td');cell.textContent=val;if(idx===16){const e=estimateApiRetail(g);cell.title=e?(e.pricingBasis==='benchmark'?'API comparison: ':'Matched API model: ')+e.pricingModel+'; standard short-context rates; 30-minute cache-write assumption':'No verified model price or complete usage available';}if(idx===10)cell.className='gpu';else if(idx>3)cell.className='num';row.append(cell)}$('rows').append(row)}if(!groups.length){const row=document.createElement('tr'),cell=document.createElement('td');cell.colSpan=18;cell.className='empty';cell.textContent='No measured records in this window yet. Historical baseline is available under All recorded usage.';row.append(cell);$('rows').append(row)}}
+async function refresh(){try{const response=await fetch('/api/summary?days='+$('window').value,{cache:'no-store'});if(!response.ok)throw Error('Collector returned '+response.status);const data=await response.json();$('error').textContent='';$('total').textContent=fmt(data.total_tokens);$('inout').textContent=fmt(data.input_tokens)+' / '+fmt(data.output_tokens);$('calls').textContent=fmt(data.calls);$('unknown').textContent=fmt(data.unknown_records);updateRetailTotals(data.groups);$('status').textContent='Updated '+new Date(data.generated_at*1000).toLocaleString()+' · '+fmt(data.records)+' accounting records';$('coverage').textContent=data.coverage;latestGroups=data.groups;renderGroups(latestGroups);$('sources').replaceChildren();for(const s of data.sources){const e=document.createElement('span'),age=Math.floor(Date.now()/1000-s.last_seen);e.textContent=s.id+' · last seen '+(age<120?'just now':Math.floor(age/60)+' min ago');$('sources').append(e)}}catch(e){$('error').textContent='Could not refresh: '+e.message+' — last successful values remain visible.'}}
+$('refresh').addEventListener('click',refresh);$('window').addEventListener('change',refresh);setupSorting();refresh();setInterval(refresh,30000);
